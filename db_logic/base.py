@@ -1,6 +1,6 @@
 from typing import Type
 
-from sqlalchemy import create_engine, Column, Integer
+from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -51,6 +51,13 @@ class SupportTickets(Base):
         session.delete(ticket)
         session.commit()
         session.close()
+
+class AllTickets(Base):
+    __tablename__ = 'all_tickets'
+
+    id = Column(Integer, primary_key=True)
+    user_id_tg = Column(Integer)
+    link_for_ticket = Column(String)
 
 
 # Создаем таблицу в базе данных, если она не существует
