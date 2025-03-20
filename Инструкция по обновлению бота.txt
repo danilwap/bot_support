@@ -11,7 +11,7 @@
 		docker system prune -a
 
 7) Собираем образ docker build -t help_bot .
-8) Запускаем контейнер docker run -rm --restart always -d help_bot
+8) Запускаем контейнер docker run --restart always -d help_bot
 
 
 

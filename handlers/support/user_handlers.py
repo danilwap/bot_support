@@ -11,9 +11,9 @@ from states import SupportState
 @dp.message_handler(commands=["start", "support", "help"])
 async def main_command(message: types.Message):
     await message.reply(
-        text="Добро пожаловать в поддержку. Введите сообщение для отправки.",
+        text="Добро пожаловать в бот поддержки Бескрокова Данилы.",
     )
-    await SupportState.send_request.set()
+    await SupportState.send_request.set()# запускает ожидание сообщения от пользователя
 
 
 @dp.message_handler(
@@ -57,3 +57,8 @@ async def test(message: types.Message):
     #         chat_id=SUPPORT_CHAT_ID,
     #         name=f"test",
     #     )
+
+
+@dp.message_handler()
+async def support_reply(message: types.Message, state: FSMContext):
+    await message.answer(text="Ваше сообщение отправлено. Ожидайте ответа.")
