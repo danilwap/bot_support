@@ -1,0 +1,13 @@
+.git
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.db
+*.log
+node_modules/
+dist/
+build/
+*.zip
+*.rar

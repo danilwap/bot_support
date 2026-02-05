@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    container_name: support_bot
+    restart: unless-stopped
+    command: python /main.py
+
+    # если используешь .env
+    env_file:
+      - .env
+
+    # если у тебя SQLite или логи — полезно
+    volumes:
+      - ./data/db:/app/data
+
+    # чтобы логи сразу было видно
+    stdin_open: true
+    tty: true
