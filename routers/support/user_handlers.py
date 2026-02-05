@@ -112,12 +112,31 @@ def require_privacy(handler: Handler) -> Handler:
 # Декоратор проверяет тип чат, если группа, то не отправляет
 def private_only(handler):
     @wraps(handler)
-    async def wrapper(message: types.Message, *args, **kwargs):
-        if message.chat.type != ChatType.PRIVATE:
+    async def wrapper(event, *args, **kwargs):
+        chat = None
+
+        if isinstance(event, Message):
+            chat = event.chat
+        elif isinstance(event, CallbackQuery) and event.message:
+            chat = event.message.chat
+
+        # если не смогли определить чат — просто не обрабатываем
+        if chat is None:
             return
-        return await handler(message, *args, **kwargs)
+
+        if chat.type != ChatType.PRIVATE:
+            # для callback можно ещё закрыть "часики"
+            if isinstance(event, CallbackQuery):
+                try:
+                    await event.answer()
+                except Exception:
+                    pass
+            return
+
+        return await handler(event, *args, **kwargs)
 
     return wrapper
+
 
 
 @router.message(Command("start", "support", "help"))
