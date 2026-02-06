@@ -32,6 +32,89 @@ def get_user_lock(user_id: int) -> asyncio.Lock:
     return lock
 
 
+async def ensure_topic_and_forward(
+    *,
+    bot,
+    message: types.Message,
+    ticket: dict,
+) -> int:
+    """Гарантирует, что сообщение попадёт в топик, а не в general.
+    Возвращает актуальный thread_id.
+    """
+    thread_id = ticket["thread_id"]
+
+    sent = await bot.forward_message(
+        chat_id=SUPPORT_CHAT_ID,
+        from_chat_id=message.chat.id,
+        message_id=message.message_id,
+        message_thread_id=thread_id,
+    )
+
+    # Если thread не применился — улетело в general
+    if getattr(sent, "is_topic_message", False):
+        return thread_id
+
+    # 1) убрать мусор из general
+    try:
+        await bot.delete_message(SUPPORT_CHAT_ID, sent.message_id)
+    except Exception:
+        pass
+
+    # 2) восстановить топик и обновить thread_id тикета
+    topic = await bot.create_forum_topic(
+        chat_id=SUPPORT_CHAT_ID,
+        name=(message.from_user.full_name or "").strip() or "Без имени",
+    )
+    new_thread_id = topic.message_thread_id
+
+    ticket_id = ticket["id"]
+    try:
+        await bot.edit_forum_topic(
+            chat_id=SUPPORT_CHAT_ID,
+            message_thread_id=new_thread_id,
+            name=f"{message.from_user.full_name or ''} | "
+                 f"{message.from_user.username or message.from_user.id} #{ticket_id}",
+        )
+    except Exception:
+        pass
+
+    ok = SupportTicketsRepo.update_thread_id(ticket_id=ticket_id, new_thread_id=new_thread_id)
+    if not ok:
+        # тикет уже закрыли/удалили в параллели
+        raise RuntimeError("ticket_closed")
+
+    # (опционально) кнопка + pinned сообщение как у тебя
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Закрыть тикет", callback_data="close_ticket")
+    kb = kb.as_markup()
+
+    uname = f"@{message.from_user.username}" if message.from_user.username else "без username"
+    msg = await bot.send_message(
+        chat_id=SUPPORT_CHAT_ID,
+        message_thread_id=new_thread_id,
+        text=f"Восстановлено обращение от пользователя {message.from_user.id} ({uname})",
+        reply_markup=kb,
+    )
+    try:
+        await bot.pin_chat_message(
+            chat_id=SUPPORT_CHAT_ID,
+            message_id=msg.message_id,
+            disable_notification=True,
+        )
+    except Exception:
+        pass
+
+    # 3) переслать исходное сообщение уже в восстановленный топик
+    await bot.forward_message(
+        chat_id=SUPPORT_CHAT_ID,
+        from_chat_id=message.chat.id,
+        message_id=message.message_id,
+        message_thread_id=new_thread_id,
+    )
+
+    return new_thread_id
+
+
 
 def privacy_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -157,29 +240,26 @@ async def send_request(message: types.Message, state: FSMContext):
     lock = get_user_lock(user_id)
 
     async with lock:
-        # 1) Повторная проверка: вдруг тикет уже создался другим апдейтом
         ticket = SupportTicketsRepo.get_open_by_tg_id(user_id)
-        if ticket and ticket.get("thread_id"):
-            # тикет уже существует — просто шлём сообщение в него
-            await state.set_state(SupportState.in_support)
 
+        if ticket and ticket.get("thread_id"):
+            await state.set_state(SupportState.in_support)
             try:
-                await message.bot.forward_message(
-                    chat_id=SUPPORT_CHAT_ID,
-                    from_chat_id=message.chat.id,
-                    message_id=message.message_id,
-                    message_thread_id=ticket["thread_id"],
-                )
-                await message.reply(text="Ваше сообщение отправлено. Ожидайте ответа.")
+                await ensure_topic_and_forward(bot=message.bot, message=message, ticket=ticket)
+                await message.reply("Ваше сообщение отправлено. Ожидайте ответа.")
+                return
+            except RuntimeError:
+                # ticket_closed
+                await state.set_state(SupportState.send_request)
+                await message.answer("Тикет уже закрыт. Напишите сообщение для нового обращения.")
                 return
             except (TelegramBadRequest, TelegramAPIError):
-                # топик битый — закрываем и продолжаем как новое обращение
+                # если именно API-ошибка — закрываем и создаём новый ниже
                 SupportTicketsRepo.close_by_thread_id(ticket["thread_id"])
                 await state.set_state(SupportState.send_request)
-                # дальше пойдём создавать новый
+                # падаем дальше в создание нового
 
-        # 2) Создаём тикет обычным путём (через SupportRequest)
-        #    (важно: остаёмся внутри lock, пока создаём топик и пишем в БД)
+        # новый тикет обычным путём
         support_request = SupportRequest(
             user_id=user_id,
             username=message.from_user.username,
@@ -187,14 +267,10 @@ async def send_request(message: types.Message, state: FSMContext):
             full_name=message.from_user.full_name,
             chat_id=message.chat.id
         )
-
         await support_request.send_support_request(message.bot)
-
-        # 3) Закрываем "окно гонки": state переводим в in_support, пока мы под lock
         await state.set_state(SupportState.in_support)
 
-    # Важно: ответ пользователю можно уже после lock
-    await message.reply(text="Ваше сообщение отправлено. Ожидайте ответа.")
+    await message.reply("Ваше сообщение отправлено. Ожидайте ответа.")
 
 
 

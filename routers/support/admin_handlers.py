@@ -73,11 +73,63 @@ async def support_admin_reply(message: types.Message):
             from_chat_id=message.chat.id,
             message_id=message.message_id,
         )
+        # 1) Пользователь заблокировал бота -> помечаем blocked (как договорились ранее)
+    except TelegramForbiddenError:
+        SupportTicketsRepo.close_by_tg_id(tg_id=ticket["tg_id"])
+
+        await message.bot.send_message(
+            chat_id=SUPPORT_CHAT_ID,
+            message_thread_id=message_thread_id,
+            text="🚫 Доставка невозможна: пользователь заблокировал бота.\n"
+                 "Тикет закрыт автоматически",
+        )
+        return
+
+    # 2) Плохой запрос / недоступный чат / деактивация / нельзя скопировать -> ЗАКРЫВАЕМ тикет
+    except TelegramBadRequest as ex:
+        txt = str(ex).lower()
+
+        close_reasons = (
+            "chat not found",
+            "user is deactivated",
+            "bot can't initiate conversation",
+            "bot was kicked",
+            "bot can't be member of the channel",
+            "message can't be copied",
+            "message can't be forwarded",
+        )
+
+        if any(r in txt for r in close_reasons):
+            SupportTicketsRepo.close_by_tg_id(tg_id=ticket["tg_id"])  # статус=closed + closed_at=now()
+
+            await message.bot.send_message(
+                chat_id=SUPPORT_CHAT_ID,
+                message_thread_id=message_thread_id,
+                text="⚠️ Доставка невозможна (Чат не найден / Пользователь заблкирован / Не возможно скопировать сообщение).\n"
+                     "Тикет закрыт автоматически.",
+            )
+            return
+
+        # если другая BadRequest — просто сообщаем, тикет не трогаем
+        await message.bot.send_message(
+            chat_id=SUPPORT_CHAT_ID,
+            message_thread_id=message_thread_id,
+            text=f"⚠️ Не удалось доставить сообщение (BadRequest): {ex}",
+        )
+        return
+
+    # 3) Всё прочее — сообщаем, но не закрываем (на твой выбор)
     except Exception as ex:
-        await message.answer(f"Не удалось доставить сообщение пользователю: {ex}")
+        await message.bot.send_message(
+            chat_id=SUPPORT_CHAT_ID,
+            message_thread_id=message_thread_id,
+            text=f"⚠️ Не удалось доставить сообщение пользователю: {ex}",
+        )
+        return
 
 
-from aiogram.exceptions import TelegramBadRequest, TelegramAPIError
+from aiogram.exceptions import TelegramBadRequest, TelegramAPIError, TelegramForbiddenError
+
 
 @router.callback_query(F.data == "close_ticket")
 async def close_ticket(call: types.CallbackQuery):
